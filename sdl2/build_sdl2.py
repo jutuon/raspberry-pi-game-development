@@ -74,6 +74,13 @@ def download_if_not_exists(url_to_file, file_name_for_download):
     else:
         run_program(["wget", url_to_file])
 
+def run_program_and_return_output(list_of_arguments):
+    try:
+        return subprocess.check_output(list_of_arguments, stderr=sys.stderr)
+    except subprocess.CalledProcessError:
+        print("error when running program '" + list_of_arguments[0] + "' with arguments " + str(list_of_arguments[1:]))
+        exit(-1)
+
 def run_program(list_of_arguments):
     try:
         subprocess.check_call(list_of_arguments, stdout=sys.stdout, stderr=sys.stderr)
@@ -87,7 +94,7 @@ def extract_if_not_exists(archive_name, dir_name):
     else:
         run_program(["tar", "--extract", "--file", archive_name])
 
-def build_library(dir_name, config_flags_list):
+def build_library(dir_name, config_flags_list, no_skip):
     os.chdir(dir_name)
 
     if not os.path.exists("build"):
@@ -95,7 +102,7 @@ def build_library(dir_name, config_flags_list):
 
     os.chdir("build")
 
-    if os.path.exists(BUILDING_OK_FILE_NAME):
+    if os.path.exists(BUILDING_OK_FILE_NAME) and not no_skip:
         print("library at directory " + dir_name + " is already been built")
     else:
         run_program(["../configure"] + config_flags_list)
@@ -198,16 +205,18 @@ def show_configure_options_for_all_libraries(list_of_libraries):
         print("\n------- Configure options for '" + library["directory_name"] + "' -------\n")
         show_configure_options(library["directory_name"])
 
-def build_all_libraries_and_copy_library_files(list_of_libraries):
+def build_all_libraries_and_copy_library_files(list_of_libraries, no_skip):
     # Build SDL2 first, because add-on libraries requires it.
     print("\n------- Building '" + SDL2_ALL["directory_name"] + "' -------\n")
     print(" Configure options: " + str(SDL2_ALL["configure_argument_list"]) + "\n")
-    build_library(SDL2_ALL["directory_name"], SDL2_ALL["configure_argument_list"])
+    build_library(SDL2_ALL["directory_name"], SDL2_ALL["configure_argument_list"], no_skip)
 
     print("\n------- Copying library files for '" + SDL2_ALL["directory_name"] + "' -------\n")
     copy_building_result(SDL2_ALL["directory_name"])
 
     os.environ["SDL2_CONFIG"] = os.path.join(os.getcwd(), SDL2_DIR, "build", "sdl2-config")
+    os.environ["CPPFLAGS"] = "-I" + os.path.join(os.getcwd(), INCLUDE_DIR, "SDL2")
+    os.environ["LDFLAGS"] = "-L" + os.path.join(os.getcwd(), LIBRARY_DIR)
 
     for library in list_of_libraries:
         if library == SDL2_ALL:
@@ -216,8 +225,7 @@ def build_all_libraries_and_copy_library_files(list_of_libraries):
         print("\n------- Building '" + library["directory_name"] + "' -------\n")
         print(" Configure options: " + str(library["configure_argument_list"]) + "\n")
 
-        library["configure_argument_list"].append("--with-sdl-prefix=" + os.getcwd())
-        build_library(library["directory_name"], library["configure_argument_list"])
+        build_library(library["directory_name"], library["configure_argument_list"], no_skip)
 
     for library in list_of_libraries:
         if library == SDL2_ALL:
@@ -299,6 +307,24 @@ SCRIPT_OPTIONS = {
         "help_text": "Add header and library files location variables to your ~/.profile",
         "libraries": [],
         "action": "modify_profile_file",
+    },
+    "--no-skip": {
+        "help_option_text": "--no-skip",
+        "help_text": "Don't skip building if library is built before.",
+        "libraries": [],
+        "action": "no_skip",
+    },
+    "--no-configure-options": {
+        "help_option_text": "--no-configure-options",
+        "help_text": "Build with no default or user selected configure options.",
+        "libraries": [],
+        "action": "no_configure_options",
+    },
+    "--no-raspberry-pi-support": {
+        "help_option_text": "--no-raspberry-pi-support",
+        "help_text": "Disables adding '--host=...' configure option with target triple containing text '-raspberry-linux'.",
+        "libraries": [],
+        "action": "no_raspberry_pi_support",
     },
 }
 
@@ -433,6 +459,9 @@ if __name__ == "__main__":
     library_to_set_configure_args = {}
 
     set_profile_variables = False
+    no_skip_when_building_libraries = False
+    no_configure_options = False
+    no_raspberry_pi_support = False
 
     for arg in sys.argv[1:]:
         if configure_arg_parsing_mode:
@@ -459,6 +488,13 @@ if __name__ == "__main__":
                 exit(0)
             elif SCRIPT_OPTIONS[arg]["action"] == "modify_profile_file":
                 set_profile_variables = True
+            elif SCRIPT_OPTIONS[arg]["action"] == "no_skip":
+                no_skip_when_building_libraries = True
+            elif SCRIPT_OPTIONS[arg]["action"] == "no_configure_options":
+                no_configure_options = True
+            elif SCRIPT_OPTIONS[arg]["action"] == "no_raspberry_pi_support":
+                no_raspberry_pi_support = True
+
         except KeyError:
             unknown_argument = True
             print("Unknown argument '" + arg +"'")
@@ -466,6 +502,18 @@ if __name__ == "__main__":
             exit(-1)
 
     change_to_build_directory()
+
+    if no_configure_options:
+        SDL2_ALL["configure_argument_list"] = []
+        SDL2_MIXER_ALL["configure_argument_list"] = []
+        SDL2_TTF_ALL["configure_argument_list"] = []
+        SDL2_IMAGE_ALL["configure_argument_list"] = []
+
+    if not no_raspberry_pi_support:
+        target_triple = run_program_and_return_output(["gcc", "-dumpmachine"]).decode().strip()
+        if not "-raspberry-linux" in target_triple:
+            target_triple = target_triple.replace("-linux", "-raspberry-linux", 1)
+        SDL2_ALL["configure_argument_list"].append("--host=" + target_triple)
 
     if len(show_configure_options_list) > 0:
         download_and_extract_all(show_configure_options_list)
@@ -475,7 +523,7 @@ if __name__ == "__main__":
 
     if len(build_libraries_list) > 0:
         download_and_extract_all(build_libraries_list)
-        build_all_libraries_and_copy_library_files(build_libraries_list)
+        build_all_libraries_and_copy_library_files(build_libraries_list, no_skip_when_building_libraries)
         print("Building libraries and copying files finished without errors.")
         print("Header files (.h) location:          '" + os.path.join(os.getcwd(), INCLUDE_DIR) + "'")
         print("Library files (.so and .a) location: '" + os.path.join(os.getcwd(), LIBRARY_DIR) + "'\n")
