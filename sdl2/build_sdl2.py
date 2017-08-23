@@ -217,6 +217,7 @@ def build_all_libraries_and_copy_library_files(list_of_libraries, no_skip):
     os.environ["SDL2_CONFIG"] = os.path.join(os.getcwd(), SDL2_DIR, "build", "sdl2-config")
     os.environ["CPPFLAGS"] = "-I" + os.path.join(os.getcwd(), INCLUDE_DIR, "SDL2")
     os.environ["LDFLAGS"] = "-L" + os.path.join(os.getcwd(), LIBRARY_DIR)
+    os.environ["LD_LIBRARY_PATH"] = os.path.join(os.getcwd(), LIBRARY_DIR)
 
     for library in list_of_libraries:
         if library == SDL2_ALL:
