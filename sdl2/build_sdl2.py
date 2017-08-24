@@ -41,7 +41,7 @@ SDL2_ALL = {
     "url": SDL2_LINK,
     "tar_archive_name": SDL2_TAR,
     "directory_name": SDL2_DIR,
-    "configure_argument_list": [],
+    "configure_argument_list": ["--disable-video-opengl"],
 }
 SDL2_MIXER_ALL = {
     "url":SDL2_MIXER_LINK,
@@ -193,11 +193,17 @@ def exit_if_running_as_root():
 
 def download_and_extract_all(list_of_libraries):
     print("\n------- Downloading SDL libraries -------\n")
+    download_if_not_exists(SDL2_ALL["url"], SDL2_ALL["tar_archive_name"])
     for library in list_of_libraries:
+        if library == SDL2_ALL:
+            continue
         download_if_not_exists(library["url"], library["tar_archive_name"])
 
     print("\n------- Extracting library source archives -------\n")
+    extract_if_not_exists(SDL2_ALL["tar_archive_name"], SDL2_ALL["directory_name"])
     for library in list_of_libraries:
+        if library == SDL2_ALL:
+            continue
         extract_if_not_exists(library["tar_archive_name"], library["directory_name"])
 
 def show_configure_options_for_all_libraries(list_of_libraries):
@@ -323,7 +329,7 @@ SCRIPT_OPTIONS = {
     },
     "--no-raspberry-pi-support": {
         "help_option_text": "--no-raspberry-pi-support",
-        "help_text": "Disables adding '--host=...' configure option with target triple containing text '-raspberry-linux'.",
+        "help_text": "Disables adding '--host=...' configure option and modifications to 'SDL_egl.c' source file",
         "libraries": [],
         "action": "no_raspberry_pi_support",
     },
@@ -396,6 +402,14 @@ def add_profile_variables():
     absolute_path_to_include_dir = os.path.abspath(INCLUDE_DIR)
     absolute_path_to_library_dir = os.path.abspath(LIBRARY_DIR)
 
+    if not os.path.exists(absolute_path_to_include_dir):
+        print("error: directory '" + absolute_path_to_include_dir + "' not found")
+        exit(-1)
+
+    if not os.path.exists(absolute_path_to_library_dir):
+        print("error: directory '" + absolute_path_to_library_dir + "' not found")
+        exit(-1)
+
     lines = [
         "# SDL2 build script environment variables\n",
         "if [ -d \""+ absolute_path_to_include_dir +"\" ] ; then\n",
@@ -443,6 +457,64 @@ def add_if_not_on_the_list(list, item):
             found = True
     if not found:
         list.append(item)
+
+# This function will change 'SDL_egl.c' source file's
+# OpenGL ES and EGL library paths.
+# Shared libraries without "brcm" text got removed from /opt/vc/lib in Raspbian 9 Stretch, and
+# SDL2 2.0.5 points to these removed files.
+def modify_shared_libraries_path_for_raspberry_pi():
+    print("\n------- Modifying 'SDL_egl.c' source file's OpenGL ES and EGL library paths -------\n")
+    path_to_source = os.path.join(os.getcwd(), SDL2_DIR, "src", "video", "SDL_egl.c")
+
+    if not os.path.exists(path_to_source):
+        print("error: '" + path_to_source +"' not found")
+        exit(-1)
+
+    original_default_egl = "/opt/vc/lib/libEGL.so"
+    original_default_ogl_es2 = "/opt/vc/lib/libGLESv2.so"
+    original_default_ogl_es_pvr = "/opt/vc/lib/libGLES_CM.so"
+    original_default_ogl_es = "/opt/vc/lib/libGLESv1_CM.so"
+
+    new_default_egl = "/opt/vc/lib/libbrcmEGL.so"
+    new_default_ogl_es2 = "/opt/vc/lib/libbrcmGLESv2.so"
+    new_default_ogl_es_pvr = "/opt/vc/lib/libbrcmGLESv2.so"
+    new_default_ogl_es = "/opt/vc/lib/libbrcmGLESv2.so"
+
+    egl_changed = False
+    ogl_es2_changed = False
+    ogl_es_pvr_changed = False
+    ogl_es_changed = False
+
+    file = open(path_to_source)
+    lines = []
+
+    line = file.readline()
+    while line != "":
+        if not (egl_changed and ogl_es2_changed and ogl_es_pvr_changed and ogl_es_changed):
+            if not egl_changed:
+                (egl_changed, line) = change_line_and_return_result_and_line(line, original_default_egl, new_default_egl)
+            if not ogl_es2_changed:
+                (ogl_es2_changed, line) = change_line_and_return_result_and_line(line, original_default_ogl_es2, new_default_ogl_es2)
+            if not ogl_es_pvr_changed:
+                (ogl_es_pvr_changed, line) = change_line_and_return_result_and_line(line, original_default_ogl_es_pvr, new_default_ogl_es_pvr)
+            if not ogl_es_changed:
+                (ogl_es_changed, line) = change_line_and_return_result_and_line(line, original_default_ogl_es, new_default_ogl_es)
+
+        lines.append(line)
+        line = file.readline()
+    file.close()
+
+    file = open(path_to_source, 'w')
+    file.writelines(lines)
+    file.close()
+
+def change_line_and_return_result_and_line(line, substring, new_substring):
+    if substring in line:
+        print("changed '" + substring +"' to '" + new_substring + "'")
+        return (True, line.replace(substring, new_substring, 1))
+
+    return (False, line)
+
 
 if __name__ == "__main__":
     exit_if_running_as_root()
@@ -524,6 +596,10 @@ if __name__ == "__main__":
 
     if len(build_libraries_list) > 0:
         download_and_extract_all(build_libraries_list)
+
+        if not no_raspberry_pi_support:
+            modify_shared_libraries_path_for_raspberry_pi()
+
         build_all_libraries_and_copy_library_files(build_libraries_list, no_skip_when_building_libraries)
         print("Building libraries and copying files finished without errors.")
         print("Header files (.h) location:          '" + os.path.join(os.getcwd(), INCLUDE_DIR) + "'")
